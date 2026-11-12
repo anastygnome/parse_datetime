@@ -487,6 +487,7 @@ version = "0.17.0"
 dependencies = [
  "codspeed-criterion-compat",
  "jiff",
+ "jiff-core",
  "num-traits",
  "rstest",
  "winnow",

@@ -117,6 +117,18 @@ fn test_date_omitting_year(#[case] input: &str, #[case] year: u32, #[case] expec
     r#"TZ="Europe/Paris" 2025-01-02 03:04:05"#,
     "2025-01-02 03:04:05+01:00"
 )]
+#[case::tz_prefix_cet_dst_summer(
+    r#"TZ="CET-1CEST,M3.5.0,M10.5.0/3" 2026-07-01 12:00"#,
+    "2026-07-01 12:00:00+02:00"
+)]
+#[case::tz_prefix_cet_dst_winter(
+    r#"TZ="CET-1CEST,M3.5.0,M10.5.0/3" 2026-01-01 12:00"#,
+    "2026-01-01 12:00:00+01:00"
+)]
+#[case::tz_prefix_est_dst_summer(r#"TZ="EST5EDT" 2026-07-01 12:00"#, "2026-07-01 12:00:00-04:00")]
+#[case::tz_prefix_est_dst_winter(r#"TZ="EST5EDT" 2026-01-01 12:00"#, "2026-01-01 12:00:00-05:00")]
+#[case::tz_prefix_xyz_dst_summer(r#"TZ="XYZ+5ABC" 2026-07-01 12:00"#, "2026-07-01 12:00:00-04:00")]
+#[case::tz_prefix_quoted_name(r#"TZ="<+03>-3" 2026-07-01 12:00"#, "2026-07-01 12:00:00+03:00")]
 fn test_tz_prefix_with_base_date(#[case] input: &str, #[case] expected: &str) {
     let base = "2020-06-15 12:00:00"
         .parse::<DateTime>()
@@ -124,6 +136,16 @@ fn test_tz_prefix_with_base_date(#[case] input: &str, #[case] expected: &str) {
         .to_zoned(TimeZone::UTC)
         .unwrap();
     check_relative(base, input, expected);
+}
+
+#[rstest]
+#[case::trailing_comma(r#"TZ="EST5EDT," 2026-07-01 12:00"#)]
+#[case::incomplete_rule(r#"TZ="EST5EDT,M3.2.0" 2026-07-01 12:00"#)]
+fn test_invalid_posix_timezone_rules(#[case] input: &str) {
+    assert!(
+        parse_datetime::parse_datetime(input).is_err(),
+        "`{input}` should be rejected"
+    );
 }
 
 // Test leap year overflow: Feb 29 + years → non-leap year should overflow to March 1
