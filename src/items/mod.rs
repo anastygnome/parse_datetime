@@ -54,7 +54,7 @@ use crate::ParsedDateTime;
 use jiff::Zoned;
 use primitive::space;
 use winnow::{
-    combinator::{alt, eof, preceded, repeat_till, terminated, trace},
+    combinator::{alt, eof, opt, preceded, repeat_till, terminated, trace},
     error::{AddContext, ContextError, ErrMode, StrContext, StrContextValue},
     stream::Stream,
     ModalResult, Parser,
@@ -216,7 +216,7 @@ fn parse(input: &mut &str) -> ModalResult<DateTimeBuilder> {
 /// - Trailing input (aside from optional whitespaces) is rejected.
 fn parse_timestamp(input: &mut &str) -> ModalResult<DateTimeBuilder> {
     // Parse and ignore an optional leading timezone rule.
-    let _ = timezone::parse(input);
+    let _ = opt(timezone::parse).parse_next(input)?;
 
     trace(
         "parse_timestamp",
@@ -238,7 +238,7 @@ fn parse_timestamp(input: &mut &str) -> ModalResult<DateTimeBuilder> {
 /// - Trailing input (aside from optional whitespaces) is rejected.
 fn parse_items(input: &mut &str) -> ModalResult<DateTimeBuilder> {
     // Parse and consume an optional leading timezone rule.
-    let tz = timezone::parse(input).map(Item::TimeZone);
+    let tz = opt(timezone::parse).parse_next(input)?.map(Item::TimeZone);
 
     // Convert input to lowercase for case-insensitive parsing.
     let lower: Cow<str> = if input.bytes().any(|b| b.is_ascii_uppercase()) {
@@ -255,7 +255,7 @@ fn parse_items(input: &mut &str) -> ModalResult<DateTimeBuilder> {
     )
     .parse_next(input)?;
 
-    if let Ok(tz) = tz {
+    if let Some(tz) = tz {
         items.push(tz);
     }
 

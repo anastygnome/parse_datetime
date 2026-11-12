@@ -16,22 +16,64 @@
 
 use jiff::tz::{Offset, TimeZone};
 use winnow::{
-    combinator::{alt, delimited, opt, preceded, repeat},
+    combinator::{alt, delimited, eof, opt, preceded, repeat},
+    error::ErrMode,
     stream::AsChar,
     token::{one_of, take_while},
     ModalResult, Parser,
 };
 
-use super::primitive::{dec_uint, plus_or_minus};
+use super::primitive::{ctx_err, dec_uint, plus_or_minus};
+
+const DEFAULT_DST_RULE: &str = "M3.2.0,M11.1.0";
+const POSIX_RULES: &str = "posixrules";
 
 pub(super) fn parse(input: &mut &str) -> ModalResult<TimeZone> {
-    delimited("TZ=\"", preceded(opt(':'), alt((posix, iana))), '"').parse_next(input)
+    let rule = delimited("TZ=\"", preceded(opt(':'), rule_string), '"').parse_next(input)?;
+    parse_rule(&rule)
 }
 
-/// Parse a posix (proleptic) timezone string (e.g., "UTC7", "JST-9").
+/// Parse a complete timezone rule.
 ///
-/// TODO: This implementation is incomplete. It currently only parses the
-/// `STDOFFSET` part of the format.
+/// Simple `STDOFFSET` rules keep their existing GNU-compatible clamping
+/// behavior. Other POSIX rules are parsed by Jiff. GNU/glibc also accept a DST
+/// abbreviation without transition dates. Jiff's parser is strict for that
+/// form, so use its `posixrules` zone first and the current US rules as a
+/// final fallback.
+fn parse_rule(rule: &str) -> ModalResult<TimeZone> {
+    let mut input = rule;
+    if let Ok(timezone) = posix(&mut input) {
+        return Ok(timezone);
+    }
+
+    match TimeZone::posix(rule) {
+        Ok(timezone) => Ok(timezone),
+        Err(_) => {
+            let missing_rule = jiff_core::tz::posix::TimeZone::parse(rule)
+                .err()
+                .is_some_and(|error| error.is_missing_dst_transition_rule());
+
+            if missing_rule {
+                let timezone = TimeZone::get(POSIX_RULES).or_else(|_| {
+                    let rule = format!("{rule},{DEFAULT_DST_RULE}");
+                    TimeZone::posix(&rule)
+                });
+                timezone.map_err(|_| ErrMode::Cut(ctx_err("invalid POSIX timezone rule")))
+            } else if rule.contains(',') {
+                Err(ErrMode::Cut(ctx_err("invalid POSIX timezone rule")))
+            } else {
+                let mut input = rule;
+                iana(&mut input)
+            }
+        }
+    }
+}
+
+/// Parse a POSIX rule containing only `STDOFFSET` (e.g., `UTC7`, `JST-9`).
+///
+/// Keeping this path separate preserves GNU's clamping behavior for the simple
+/// rules already accepted by the parser. Full POSIX rules are delegated to
+/// `jiff::tz::TimeZone::posix` by [`parse_rule`].
 ///
 /// From the GNU docs:
 ///
@@ -53,9 +95,21 @@ pub(super) fn parse(input: &mut &str) -> ModalResult<TimeZone> {
 /// > hour HH must be between 0 and 24 and may be a single digit, and the
 /// > minutes MM and seconds SS, if present, must be between 0 and 59.
 fn posix(input: &mut &str) -> ModalResult<TimeZone> {
-    (take_while(3.., AsChar::is_alpha), posix_offset)
-        .verify_map(|(_, offset)| Offset::from_seconds(offset).ok().map(|o| o.to_time_zone()))
+    (take_while(3.., AsChar::is_alpha), posix_offset, eof)
+        .verify_map(|(_, offset, _)| Offset::from_seconds(offset).ok().map(|o| o.to_time_zone()))
         .parse_next(input)
+}
+
+fn rule_string(input: &mut &str) -> ModalResult<String> {
+    repeat(
+        0..,
+        alt((
+            preceded('\\', one_of(['\\', '"'])).map(|c: char| c.to_string()),
+            take_while(1, |c| c != '"' && c != '\\').map(str::to_string),
+        )),
+    )
+    .map(|parts: Vec<String>| parts.concat())
+    .parse_next(input)
 }
 
 /// Parse an IANA (geographical) timezone string (e.g., "Europe/Paris"). If the
@@ -82,16 +136,9 @@ fn posix(input: &mut &str) -> ModalResult<TimeZone> {
 /// > administrator, who also sets ‘/etc/localtime’ to point to the data file
 /// > for the local time zone ruleset.
 fn iana(input: &mut &str) -> ModalResult<TimeZone> {
-    repeat(
-        0..,
-        alt((
-            preceded('\\', one_of(['\\', '"'])).map(|c: char| c.to_string()),
-            take_while(1, |c| c != '"' && c != '\\').map(str::to_string),
-        )),
-    )
-    .map(|parts: Vec<String>| parts.concat())
-    .map(|s| TimeZone::get(&s).unwrap_or(TimeZone::UTC))
-    .parse_next(input)
+    rule_string
+        .map(|s| TimeZone::get(&s).unwrap_or(TimeZone::UTC))
+        .parse_next(input)
 }
 
 fn posix_offset(input: &mut &str) -> ModalResult<i32> {
@@ -272,6 +319,28 @@ mod tests {
         ] {
             let mut s = input;
             assert!(posix(&mut s).is_err(), "{input}");
+        }
+    }
+
+    #[test]
+    fn parse_full_posix_rules() {
+        for input in [
+            r#"TZ="CET-1CEST,M3.5.0,M10.5.0/3""#,
+            r#"TZ="EST5EDT""#,
+            r#"TZ="XYZ+5ABC""#,
+            r#"TZ="<+03>-3""#,
+        ] {
+            let mut s = input;
+            assert!(parse(&mut s).is_ok(), "{input}");
+            assert!(s.is_empty(), "{input}");
+        }
+    }
+
+    #[test]
+    fn reject_invalid_full_posix_rules() {
+        for input in [r#"TZ="EST5EDT,""#, r#"TZ="EST5EDT,M3.2.0""#] {
+            let mut s = input;
+            assert!(parse(&mut s).is_err(), "{input}");
         }
     }
 

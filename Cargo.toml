@@ -11,7 +11,8 @@ rust-version = "1.71.1"
 [dependencies]
 winnow = "1.0.0"
 num-traits = "0.2.19"
-jiff = { version = "0.2.15", default-features = false, features = ["tz-system", "tzdb-bundle-platform", "tzdb-zoneinfo"] }
+jiff = { version = "0.2.43", default-features = false, features = ["tz-system", "tzdb-bundle-platform", "tzdb-zoneinfo"] }
+jiff-core = "0.1.5"
 
 [dev-dependencies]
 rstest = "0.28"
